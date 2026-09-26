@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -e
+
+if [ "$#" -ne 3 ]; then
+    echo "Usage:"
+    echo "  add-student <student-id> \"Full Name\" <email>"
+    echo
+    echo "Example:"
+    echo "  add-student student-001 \"Student Name\" student@example.com"
+    exit 1
+fi
+
+STUDENT_ID="$1"
+STUDENT_NAME="$2"
+STUDENT_EMAIL="$3"
+
+cd ~/Desktop/assignment-agent-multiuser
+
+python -m app.main student-add \
+    --id "$STUDENT_ID" \
+    --name "$STUDENT_NAME" \
+    --email "$STUDENT_EMAIL"
+
+mkdir -p \
+    "credentials/students/$STUDENT_ID"
+
+echo
+echo "Student added successfully."
+echo
+echo "Next steps:"
+echo "  student-auth $STUDENT_ID"
+echo "  student-scan $STUDENT_ID --dry-run --verbose"
+echo "  student-scan $STUDENT_ID"

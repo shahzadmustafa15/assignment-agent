@@ -1,0 +1,21 @@
+[Unit]
+Description=Assignment Agent VPS lms-scan
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=assignment-agent
+Group=assignment-agent
+WorkingDirectory=/opt/assignment-agent
+Environment=HOME=/var/lib/assignment-agent
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/assignment-agent/ms-playwright
+Environment=ASSIGNMENT_NOTIFICATION_DESTINATION=journal
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/assignment-agent/config/.env
+Environment=ASSIGNMENT_LMS_BACKGROUND=1
+ExecStart=/opt/assignment-agent/.venv/bin/python -m app.main lms-scan
+UMask=0077
+TimeoutStartSec=3min
+StandardOutput=journal
+StandardError=journal

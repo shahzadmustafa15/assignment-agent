@@ -1,0 +1,101 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ============================================================
+# Environment variables / secrets
+# ============================================================
+.env
+.env.*
+!.env.example
+
+# ============================================================
+# Credentials / authentication
+# ============================================================
+credentials/
+secrets/
+private/
+
+token.json
+tokens.json
+gmail_token.json
+gmail_credentials.json
+credentials.json
+client_secret*.json
+client_secrets*.json
+*.token
+
+# ============================================================
+# Playwright / browser authentication state
+# ============================================================
+*bahria_storage_state*.json
+*storage_state*.json
+playwright/.auth/
+.auth/
+
+# ============================================================
+# Databases
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+data/
+instance/
+
+# ============================================================
+# Logs
+# ============================================================
+*.log
+logs/
+
+# ============================================================
+# Backups
+# ============================================================
+backup/
+backups/
+*.bak
+*.backup
+*-backup.py
+*-before-*.py
+
+# ============================================================
+# Temporary files
+# ============================================================
+tmp/
+temp/
+*.tmp
+*.swp
+*~
+
+# ============================================================
+# IDE / OS
+# ============================================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Coverage/build artifacts
+# ============================================================
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local migration / development helper scripts
+scripts/import_*_existing.py
+scripts/migrate_multiuser_step1.py
+scripts/patch_*.py

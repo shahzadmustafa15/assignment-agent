@@ -1,0 +1,15 @@
+[Unit]
+Description=Assignment Agent Bahria LMS scan
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/assignment-agent
+ExecStart=%h/Desktop/assignment-agent/.venv/bin/python -m app.main lms-scan
+Environment="ASSIGNMENT_LMS_BACKGROUND=1"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
+Environment="PYTHONUNBUFFERED=1"
+UMask=0077
+TimeoutStartSec=3min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=assignment-agent-lms-scan

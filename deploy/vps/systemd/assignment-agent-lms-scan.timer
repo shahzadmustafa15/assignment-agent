@@ -1,0 +1,11 @@
+[Unit]
+Description=Scan Bahria LMS every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+AccuracySec=1min
+Unit=assignment-agent-lms-scan.service
+
+[Install]
+WantedBy=timers.target

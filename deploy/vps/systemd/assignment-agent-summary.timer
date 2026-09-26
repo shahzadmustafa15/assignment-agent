@@ -1,0 +1,11 @@
+[Unit]
+Description=Assignment summary at 8 PM Asia/Karachi
+
+[Timer]
+OnCalendar=*-*-* 20:00:00 Asia/Karachi
+Persistent=true
+AccuracySec=1min
+Unit=assignment-agent-summary.service
+
+[Install]
+WantedBy=timers.target

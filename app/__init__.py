@@ -1,0 +1,1 @@
+"""Local assignment monitoring application."""

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check assignment deadlines every five minutes
+
+[Timer]
+OnStartupSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=assignment-agent-reminders.service
+
+[Install]
+WantedBy=timers.target

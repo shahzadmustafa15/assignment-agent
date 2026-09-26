@@ -1,0 +1,9 @@
+[Unit]
+Description=Assignment Agent daily desktop summary
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/assignment-agent
+ExecStart=%h/Desktop/assignment-agent/.venv/bin/python -m app.main daily-summary --notify
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
+UMask=0077

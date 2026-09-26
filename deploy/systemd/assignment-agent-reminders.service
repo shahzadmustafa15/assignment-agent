@@ -1,0 +1,9 @@
+[Unit]
+Description=Assignment Agent deadline reminder check
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/assignment-agent
+ExecStart=%h/Desktop/assignment-agent/.venv/bin/python -m app.main check-reminders
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
+UMask=0077

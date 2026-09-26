@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+
+import sys
+from types import SimpleNamespace
+
+from app.config import load_settings
+from app.database import Database
+from app.email_notifications import send_email
+from app.email_templates import build_assignment_summary
+
+
+def get_student(connection, student_id):
+    return connection.execute(
+        """
+        SELECT id, name, email, enabled
+        FROM students
+        WHERE id=?
+        """,
+        (student_id,),
+    ).fetchone()
+
+
+def send_student_email(db, student_id):
+    with db._connect() as connection:
+        row = get_student(
+            connection,
+            student_id,
+        )
+
+    if row is None:
+        print(
+            f"Student not found: {student_id}"
+        )
+        return False
+
+    if not row["enabled"]:
+        print(
+            f"Student is disabled: {student_id}"
+        )
+        return False
+
+    student = SimpleNamespace(
+        id=row["id"],
+        name=row["name"],
+        email=row["email"],
+        enabled=bool(row["enabled"]),
+    )
+
+    assignments = db.list_assignments(
+        student_id=student.id
+    )
+
+    subject, text_body, html_body = (
+        build_assignment_summary(
+            student,
+            assignments,
+        )
+    )
+
+    send_email(
+        subject,
+        text_body,
+        student.email,
+        html_body=html_body,
+    )
+
+    print(
+        f"✓ Professional summary sent to "
+        f"{student.name} <{student.email}>"
+    )
+
+    return True
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(
+            "Usage: ./email-student "
+            "<student-id|all>"
+        )
+        print()
+        print("Examples:")
+        print("  ./email-student student-001")
+        print("  ./email-student student-002")
+        print("  ./email-student student-003")
+        print("  ./email-student all")
+        raise SystemExit(1)
+
+    target = sys.argv[1].strip().lower()
+
+    db = Database(
+        load_settings().database_path
+    )
+
+    if target == "all":
+        with db._connect() as connection:
+            students = connection.execute(
+                """
+                SELECT id
+                FROM students
+                WHERE enabled=1
+                ORDER BY name
+                """
+            ).fetchall()
+
+        sent = 0
+        failed = 0
+
+        for row in students:
+            try:
+                if send_student_email(
+                    db,
+                    row["id"],
+                ):
+                    sent += 1
+                else:
+                    failed += 1
+
+            except Exception as exc:
+                failed += 1
+                print(
+                    f"✗ {row['id']}: "
+                    f"{type(exc).__name__}"
+                )
+
+        print()
+        print("=" * 45)
+        print(f"Sent:   {sent}")
+        print(f"Failed: {failed}")
+
+        raise SystemExit(
+            1 if failed else 0
+        )
+
+    try:
+        success = send_student_email(
+            db,
+            target,
+        )
+
+    except Exception as exc:
+        print(
+            "Email failed:",
+            type(exc).__name__,
+        )
+        raise SystemExit(1)
+
+    raise SystemExit(
+        0 if success else 1
+    )
+
+
+if __name__ == "__main__":
+    main()
