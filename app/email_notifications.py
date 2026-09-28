@@ -146,11 +146,14 @@ def enqueue_assignment(
     )
 
 
-def email_content(kind, assignment=None):
+def email_content(kind, assignment=None, *, student_id=None):
     if kind == 'LMS_AUTH_EXPIRED':
+        command = (f'python -m app.main student-auth {student_id}'
+                   if student_id else 'python -m app.main lms-auth')
         return ('Bahria LMS Login Required',
                 'Your Assignment Agent could not access Bahria LMS because the saved session\n'
-                'expired.\n\nRun:\npython -m app.main lms-auth')
+                f'expired.\n\nRun:\n{command}\n\n'
+                'Enter your Bahria credentials only in the browser. The application does not collect your password.')
     label = {
         'NEW_ASSIGNMENT': 'New Bahria Assignment',
         'DUE_TOMORROW': 'Assignment Due Tomorrow',
@@ -394,6 +397,7 @@ def deliver_pending(database, now=None, *, event_types=None):
                     subject, body = email_content(
                         event['event_type'],
                         assignment,
+                        student_id=event['student_id'],
                     )
 
                 connection.execute(

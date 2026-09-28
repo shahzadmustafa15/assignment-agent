@@ -24,6 +24,27 @@ def make_student_id(name: str) -> str:
     return value.strip("-")
 
 
+def validate_student_id(student_id: str) -> str:
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", student_id):
+        raise ValueError("Student ID must contain lowercase letters, digits and single hyphens.")
+    return student_id
+
+
+def student_session_path(student, project_root):
+    """Reject shared or redirected paths rather than crossing student sessions."""
+    from pathlib import Path
+    from app.lms.base import LMSError
+    validate_student_id(student.id)
+    path = Path(student.session_path)
+    if not path.is_absolute():
+        path = project_root / path
+    expected = project_root / 'credentials' / 'students' / student.id
+    if (path.parent != expected or path.name != 'bahria_storage_state.json'
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise LMSError("Student session must use that student's isolated credentials directory.")
+    return path
+
+
 def validate_email(email: str) -> str:
     email = email.strip()
 
@@ -56,6 +77,7 @@ def add_student(
 
     if not student_id:
         raise ValueError("Could not create student ID")
+    validate_student_id(student_id)
 
     session_path = (
         f"credentials/students/{student_id}/"

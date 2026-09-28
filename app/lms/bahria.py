@@ -3,7 +3,7 @@ import json
 from urllib.parse import urlsplit
 from app.lms.base import LMSError, validate_url
 from app.lms.parser import inspect_structure, safe_text, safe_url
-from app.lms.session import read_state, save_state, session_status, browser_options
+from app.lms.session import read_state, save_state, session_status, browser_context, has_session, playwright_session
 
 
 class BahriaLMSAdapter:
@@ -14,7 +14,7 @@ class BahriaLMSAdapter:
 
     def run(self, command: str, *, dry_run=False, verbose=False, configure_background=False):
         state = None if command == "lms-auth" else read_state(self.settings.state_path)
-        if command != "lms-auth" and state is None and not configure_background:
+        if command != "lms-auth" and not has_session(self.settings) and not configure_background:
             print("Auth state: absent. Reauthentication required; run python -m app.main lms-auth.")
             return 1
         url = self.settings.portal_url
@@ -29,19 +29,18 @@ class BahriaLMSAdapter:
         except ImportError:
             raise LMSError("Install project requirements and run python -m playwright install chromium.") from None
         try:
-            with (self.factory or sync_playwright)() as playwright:
-                browser = playwright.chromium.launch(**browser_options(command == "lms-status"))
-                try:
-                    context = browser.new_context(storage_state=state, accept_downloads=False)
+            with playwright_session(self.factory or sync_playwright) as playwright:
+                with browser_context(playwright, self.settings,
+                                     headless=command == "lms-status", state=state) as context:
                     context.set_default_timeout(15000)
-                    page = context.new_page()
+                    page = context.pages[0] if self.settings.profile_path and context.pages else context.new_page()
                     response = page.goto(url, wait_until="domcontentloaded", timeout=45000)
                     if response is not None and response.status >= 400:
                         raise LMSError(f"Portal returned HTTP {response.status}; session could not be checked.")
                     if command == "lms-auth":
-                        answer = self.prompt("Log in manually in Chromium. Once your authenticated portal is visible, type yes here to save the session: ")
+                        answer = self.prompt("Use the signed-in Chromium session if available, or log in manually. Once your authenticated portal is visible, type yes here to save the session: ")
                         if answer.strip().lower() != "yes":
-                            print("Authentication cancelled; existing saved state was preserved.")
+                            print("Authentication cancelled; the existing JSON snapshot was preserved. Browser profile changes may persist.")
                             return 1
                         status = session_status(page, url)
                         if not status.startswith("session appears usable"):
@@ -82,8 +81,6 @@ class BahriaLMSAdapter:
                             return 1 if result['errors'] else 0
                         print(json.dumps(inspect_structure(page), indent=2, ensure_ascii=True))
                     return 0
-                finally:
-                    browser.close()
         except (EOFError, KeyboardInterrupt):
             raise LMSError("Browser operation cancelled; saved state was preserved.") from None
         except Error:

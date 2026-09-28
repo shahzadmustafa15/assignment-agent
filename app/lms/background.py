@@ -6,17 +6,19 @@ page remain private files under credentials; no credentials are entered here.
 import fcntl
 import hashlib
 import json
+import os
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 from app.lms.base import LMSError, validate_url
 from app.lms.extraction import read_assignment_table
 from app.lms.parser import public_link
-from app.lms.session import browser_options, login_page, read_state, save_state
+from app.lms.session import browser_context, login_page, read_state, save_state, has_session, private_directory, playwright_session
 from app.notifier import DesktopNotifier, NotificationError
 
 AUTH_COOLDOWN = 24 * 60 * 60
@@ -33,6 +35,54 @@ def event(name, **counts):
 
 def target_path(settings):
     return settings.state_path.with_name('bahria_scan_target.json')
+
+
+def auth_notice_path(local_settings, student_id=None):
+    directory = local_settings.data_dir
+    if student_id:
+        directory = directory / 'students' / student_id
+    return directory / 'lms-auth-notice.json'
+
+
+def clear_auth_notice(local_settings, student_id=None):
+    """Explicit reset, even when reauthentication returns identical cookies."""
+    save_state(auth_notice_path(local_settings, student_id), {})
+
+
+def recover_session(context, settings):
+    """One read-only CMS-to-LMS handoff using the portal's actual link.
+
+    Never submit a login form, infer a token URL, or retry a login. Only Bahria
+    HTTPS origins are eligible; an absent/ambiguous link requires manual auth.
+    """
+    portal = urlsplit(settings.portal_url)
+    if portal.scheme != 'https' or not (portal.hostname or '').endswith('.bahria.edu.pk'):
+        return False
+    page = context.new_page()
+    try:
+        response = page.goto(settings.portal_url, wait_until='domcontentloaded', timeout=45000)
+        check_auth(page, response)
+        if urlsplit(page.url).netloc != portal.netloc:
+            return False
+        links = page.get_by_role('link', name=re.compile(r'^\s*Go To LMS\s*$', re.I))
+        visible = [links.nth(i) for i in range(links.count()) if links.nth(i).is_visible()]
+        if len(visible) != 1:
+            return False
+        href = visible[0].get_attribute('href')
+        if not href:
+            return False
+        url = urljoin(page.url, href)
+        destination = urlsplit(url)
+        if (destination.scheme != 'https' or destination.username or destination.password
+                or not (destination.hostname or '').endswith('.bahria.edu.pk')):
+            return False
+        response = page.goto(url, wait_until='domcontentloaded', timeout=45000)
+        check_auth(page, response)
+        return urlsplit(page.url).hostname == 'lms.bahria.edu.pk'
+    except AuthExpired:
+        return False
+    finally:
+        page.close()
 
 
 def private_json(path):
@@ -98,8 +148,9 @@ def configure_target(settings, context, page, table):
 
 @contextmanager
 def scan_lock(directory):
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (directory / 'lms-scan.lock').open('a') as handle:
+    private_directory(directory)
+    fd = os.open(directory / 'lms-scan.lock', os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a') as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -119,26 +170,16 @@ def run_background(settings, local_settings, *, dry_run=False, notifier=None,
     from app.lms.scan import scan_table
     notifier = notifier or DesktopNotifier()
 
-    if student_id:
-        state_file = (
-            local_settings.data_dir
-            / "students"
-            / student_id
-            / "lms-auth-notice.json"
-        )
-    else:
-        state_file = (
-            local_settings.data_dir
-            / "lms-auth-notice.json"
-        )
+    state_file = auth_notice_path(local_settings, student_id)
 
     result_code = 1
     event('scan_started', dry_run=dry_run)
     try:
-        with scan_lock(local_settings.data_dir) as acquired:
+        lock_directory = settings.state_path.parent if student_id else local_settings.data_dir
+        with scan_lock(lock_directory) as acquired:
             if not acquired:
                 event('scan_skipped_already_running')
-                result_code = 1 if report_email else 0
+                result_code = 1 if report_email or student_id else 0
                 return result_code
             notice = private_json(state_file) if state_file.exists() else {}
             # Hash only for detecting an explicit reauthentication; never logged.
@@ -147,49 +188,49 @@ def run_background(settings, local_settings, *, dry_run=False, notifier=None,
             if (not dry_run and notice.get('fingerprint') == fingerprint
                     and now < notice.get('retry_after', 0)):
                 event('authentication_required_cooldown')
-                result_code = 1 if report_email else 0
+                result_code = 1 if report_email or student_id else 0
                 return result_code
             try:
-                state = read_state(settings.state_path)
-                if state is None:
+                if not has_session(settings):
                     raise AuthExpired('LMS session absent.')
+                state = read_state(settings.state_path)
                 target = load_target(settings)
-                with (playwright_factory or sync_playwright)() as playwright:
-                    browser = playwright.chromium.launch(**browser_options(True))
-                    try:
-                        context = browser.new_context(storage_state=state, accept_downloads=False)
+                with playwright_session(playwright_factory or sync_playwright) as playwright:
+                    with browser_context(playwright, settings, headless=True, state=state) as context:
                         context.set_default_timeout(15000)
-                        if multi_course or report_email:
-                            from app.lms.courses import scan_courses
-                            report_options = {'include': '', 'exclude': '', 'notify': False, 'report_details': True} if report_email else {}
-                            result = scan_courses(
-                                context,
-                                target,
-                                local_settings.database_path,
-                                notifier,
-                                dry_run=dry_run,
-                                verbose=verbose,
-                                discover_only=discover_only,
-                                student_id=student_id or "shahzad",
-                                **report_options,
-                            )
-                            if result.get('auth_expired'):
-                                raise AuthExpired('LMS session expired during course navigation.')
-                        else:
-                            table = fetch_table(context, target)
-                            event('authentication_valid')
-                            result = scan_table(
-                                table,
-                                local_settings.database_path,
-                                notifier,
-                                dry_run=dry_run,
-                                verbose=verbose,
-                                student_id=student_id or "shahzad",
-                            )
+                        for attempt in range(2):
+                            try:
+                                if multi_course or report_email:
+                                    from app.lms.courses import scan_courses
+                                    report_options = {'include': '', 'exclude': '', 'notify': False, 'report_details': True} if report_email else {}
+                                    result = scan_courses(
+                                        context, target, local_settings.database_path, notifier,
+                                        dry_run=dry_run, verbose=verbose, discover_only=discover_only,
+                                        student_id=student_id or "shahzad", **report_options,
+                                    )
+                                    if result.get('auth_expired'):
+                                        raise AuthExpired('LMS session expired during course navigation.')
+                                else:
+                                    table = fetch_table(context, target)
+                                    event('authentication_valid')
+                                    result = scan_table(
+                                        table, local_settings.database_path, notifier,
+                                        dry_run=dry_run, verbose=verbose,
+                                        student_id=student_id or "shahzad",
+                                    )
+                                break
+                            except AuthExpired:
+                                if attempt or not settings.profile_path or not recover_session(context, settings):
+                                    raise
+                                event('authentication_recovery_attempted')
                         if not dry_run:
                             save_state(settings.state_path, context.storage_state(indexed_db=True))
                         if not dry_run and notice:
                             save_state(state_file, {})
+                        if not dry_run and student_id:
+                            from app.database import Database
+                            from app.students import set_auth_status
+                            set_auth_status(Database(local_settings.database_path), student_id, 'ACTIVE')
                         event('scan_result', parsed=result['parsed'], new=result['new'],
                               existing=result['existing'], updated=result['updated'],
                               requiring_review=result['review'], errors=len(result['errors']),
@@ -198,8 +239,6 @@ def run_background(settings, local_settings, *, dry_run=False, notifier=None,
                             from app.assignment_report import send_assignment_report
                             send_assignment_report(result)
                         result_code = int(bool(result['errors']))
-                    finally:
-                        browser.close()
             except AuthExpired:
                 event('authentication_required')
                 if report_email:
@@ -207,6 +246,10 @@ def run_background(settings, local_settings, *, dry_run=False, notifier=None,
                     result_code = 1
                     return result_code
                 if not dry_run:
+                    if student_id:
+                        from app.database import Database
+                        from app.students import set_auth_status
+                        set_auth_status(Database(local_settings.database_path), student_id, 'LOGIN_REQUIRED')
                     last = notice.get('notified_at', 0)
                     if not last or now - last >= AUTH_COOLDOWN:
                         try:
@@ -232,7 +275,7 @@ def run_background(settings, local_settings, *, dry_run=False, notifier=None,
                     )
                     save_state(state_file, {'fingerprint': fingerprint,
                                'retry_after': now + AUTH_COOLDOWN, 'notified_at': last})
-                result_code = 0
+                result_code = 1 if student_id else 0
     except (LMSError, Error, OSError, sqlite3.Error, ValueError, KeyError, TypeError):
         # Never log exception text: Playwright errors can include session URLs.
         event('scan_error', errors=1)

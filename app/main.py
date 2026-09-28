@@ -14,6 +14,7 @@ from app.database import AssignmentNotFoundError, Database
 from app.models import LOCAL_TIMEZONE, Status
 from app.notifier import DesktopNotifier, NotificationError
 from app.scheduler import check_reminders, daily_summary
+from app.lms.base import LMSError
 
 
 def display(value) -> str:
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     student_scan.add_argument(
         "--dry-run",
         action="store_true",
-        help="Read-only comparison; no writes or notifications",
+        help="Read-only assignment comparison; no notifications (browser session may refresh)",
     )
     student_scan.add_argument(
         "--verbose",
@@ -125,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     scan_all.add_argument(
         "--dry-run",
         action="store_true",
-        help="Read-only comparison; no writes or notifications",
+        help="Read-only assignment comparison; no notifications (browser sessions may refresh)",
     )
     scan_all.add_argument(
         "--verbose",
@@ -168,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("gmail-auth", "gmail-scan", "gmail-status"):
             return gmail_command(args)
         if args.command in ("lms-auth", "lms-status", "lms-inspect", "lms-scan", "lms-courses"):
-            from app.lms.base import LMSError, load_settings as load_lms_settings
+            from app.lms.base import load_settings as load_lms_settings
             from app.lms.bahria import BahriaLMSAdapter
             try:
                 lms_settings = load_lms_settings()
@@ -272,8 +273,8 @@ def main(argv: list[str] | None = None) -> int:
             from pathlib import Path
             import json
 
-            from app.students import get_student
-            from app.lms.base import LMSSettings, LMSError
+            from app.students import get_student, student_session_path
+            from app.lms.base import LMSSettings
             from app.lms.background import run_background
 
             student = get_student(
@@ -295,33 +296,16 @@ def main(argv: list[str] | None = None) -> int:
                 Path(__file__).resolve().parent.parent
             )
 
-            state_path = Path(student.session_path)
-
-            if not state_path.is_absolute():
-                state_path = project_root / state_path
-
-            state_path = state_path.resolve()
-
-            if not state_path.exists():
-                raise LMSError(
-                    "Student LMS session is missing. "
-                    f"Run: python -m app.main student-auth {student.id}"
-                )
+            state_path = student_session_path(student, project_root)
 
             portal_path = state_path.with_name(
                 "bahria_portal.json"
             )
 
-            if not portal_path.exists():
-                raise LMSError(
-                    "Student portal configuration is missing. "
-                    f"Run: python -m app.main student-auth {student.id}"
-                )
-
             try:
                 portal_data = json.loads(
                     portal_path.read_text()
-                )
+                ) if portal_path.exists() else {}
                 portal_url = portal_data.get(
                     "portal_url",
                     "",
@@ -344,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
             settings_for_student = LMSSettings(
                 portal_url=portal_url.strip(),
                 state_path=state_path,
+                profile_path=state_path.with_name('browser-profile'),
             )
 
             print(
@@ -364,8 +349,8 @@ def main(argv: list[str] | None = None) -> int:
             from pathlib import Path
             import json
 
-            from app.students import get_student, set_auth_status
-            from app.lms.base import LMSSettings, LMSError
+            from app.students import get_student, set_auth_status, student_session_path
+            from app.lms.base import LMSSettings
             from app.lms.bahria import BahriaLMSAdapter
 
             student = get_student(database, args.student_id)
@@ -377,12 +362,7 @@ def main(argv: list[str] | None = None) -> int:
 
             project_root = Path(__file__).resolve().parent.parent
 
-            state_path = Path(student.session_path)
-
-            if not state_path.is_absolute():
-                state_path = project_root / state_path
-
-            state_path = state_path.resolve()
+            state_path = student_session_path(student, project_root)
 
             # Keep each student's portal configuration next to
             # that student's private browser state.
@@ -414,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             settings_for_student = LMSSettings(
                 portal_url=portal_url,
                 state_path=state_path,
+                profile_path=state_path.with_name('browser-profile'),
             )
 
             print(
@@ -435,18 +416,16 @@ def main(argv: list[str] | None = None) -> int:
                 settings_for_student
             )
 
-            result = adapter.run(
-                "lms-auth",
-                configure_background=True,
-            )
+            from app.lms.background import scan_lock, clear_auth_notice
+            with scan_lock(state_path.parent) as acquired:
+                if not acquired:
+                    raise LMSError('This student has an active scan or authentication browser; retry after it finishes.')
+                result = adapter.run("lms-auth", configure_background=True)
+                if result == 0:
+                    clear_auth_notice(settings, student.id)
+                    set_auth_status(database, student.id, "ACTIVE")
 
             if result == 0:
-                set_auth_status(
-                    database,
-                    student.id,
-                    "ACTIVE",
-                )
-
                 print(
                     f"Student authentication ready: "
                     f"{student.id}"
@@ -616,6 +595,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{assignment.id} | {assignment.status.value} | {assignment.course} | "
                       f"{assignment.title} | {display(assignment.deadline)}")
         return 0
+    except LMSError as exc:
+        print(f"LMS: {exc}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, sqlite3.Error, AssignmentNotFoundError, NotificationError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -35,6 +35,9 @@ credentials.json
 client_secret*.json
 client_secrets*.json
 *.token
+# Local private keys and certificates; use explicit exceptions for reviewed public fixtures.
+*.pem
+*.key
 
 # ============================================================
 # Playwright / browser authentication state
@@ -43,6 +46,7 @@ client_secrets*.json
 *storage_state*.json
 playwright/.auth/
 .auth/
+browser-profile/
 
 # ============================================================
 # Databases
@@ -50,6 +54,15 @@ playwright/.auth/
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 data/
 instance/
 

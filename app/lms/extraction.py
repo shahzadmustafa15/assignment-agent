@@ -50,7 +50,8 @@ TABLE_SCRIPT = """() => {
 
 def read_assignment_table(page):
     if login_page(page):
-        raise LMSError('LMS session expired; run lms-auth and log in again.')
+        from app.lms.background import AuthExpired
+        raise AuthExpired('LMS session expired; authenticate again.')
     snapshot = page.evaluate(TABLE_SCRIPT)
     tables = snapshot.get('tables', [])
     if len(tables) != 1:

@@ -21,6 +21,7 @@ def validate_url(value: str) -> str:
 class LMSSettings:
     portal_url: str
     state_path: Path
+    profile_path: Path | None = None
 
 
 def load_settings() -> LMSSettings:
